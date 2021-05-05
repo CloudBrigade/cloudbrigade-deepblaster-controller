@@ -1,4 +1,16 @@
 /* * * * * * * * * * * * * * * * * * * * * * *
+ *   Cloud Brigade - Deep Blaster
+ *   Code by: Chris Miller
+ *   Website: https://www.cloudbrigade.com
+ *   Version: 1.0
+ *   Date:    Apr 21, 2021
+ *   Copyright (C) 2020, Apache 2.0  License
+ *
+ *   Code included from these excellent projects
+ *   Servo Trajectory by Simon Bluett
+ *   https://github.com/chillibasket/arduino-classes/tree/master/servo-trajectory
+ *   Robust Serial by Antonin Raffin
+ *   https://github.com/araffin/arduino-robust-serial
  * * * * * * * * * * * * * * * * * * * * * * */
 #include <Arduino.h>
 #include "trajectory.h"
@@ -6,24 +18,20 @@
 #include "blasterctrl.h"
 #include "parameters.h"
 #include <Servo.h>
-bool is_connected = false; ///< True if the connection with the master is available
-
-// --- Instantiate the class ---
+bool is_connected = false; ///< True if the connection with the DeepRacer is available
 /**
  * If you want the acceleration and deceleration to be the same
  * FORMAT: Trajectory(max velocity, acceleration)
  * If the acceleration and deceleration are different
  * FORMAT: Trajectory(max velocity, acceleration, deceleration)
- */
-Trajectory xservoTrajectory(60, 40, 34);
-Trajectory yservoTrajectory(60, 40, 34);
-
-/**
+ *
  * By default the dynamics controller turns off when it is within 0.1 units
  * of the target position. This threshold value can be changed in the declaration
  * FORMAT: Dynamics(max velocity, acceleration, deceleration, threshold)
  */
-//Trajectory xservoTrajectory(60, 40, 34, 0.05);
+// --- Instantiate the class ---
+Trajectory xservoTrajectory(60, 40, 34, 0.1);
+Trajectory yservoTrajectory(60, 40, 34, 0.1);
 
 Servo xservo;
 Servo yservo;
@@ -33,11 +41,11 @@ Servo yservo;
 #define UPDATE_FREQUENCY 100
 #define UPDATE_TIME (1000 / UPDATE_FREQUENCY)
 unsigned long updateTimer = 0;
-int moveNumber = 0;
-int xservo_angle;
-
-#define MOTOR_PIN 3
-#define TRIGGER_PIN 4
+int xservo_angle = (X_INITIAL_THETA + X_OFFSET);
+int yservo_angle = (Y_INITIAL_THETA + Y_OFFSET);
+int flywheel_engage = 0;
+int trigger_engage = 0;
+int fspin;
 
 /* * * * * * * * * * * * * * * * * * * * * * *
  * SETUP
@@ -49,88 +57,64 @@ void setup() {
 	// Serial.println("Starting DeepBlaster Serial Controller");
 
   // Init Motors and Servos
-  pinMode(MOTOR_PIN, OUTPUT);
+  pinMode(FLYWHEEL_PIN, OUTPUT);
   pinMode(TRIGGER_PIN, OUTPUT);
-	// Attaches the servo on pin 9 to the servo object
+	// Attaches the servo pin to the servo object
   xservo.attach(XSERVO_PIN);
   yservo.attach(YSERVO_PIN);
 
 	// Set servos at initial position
-	xservo.write(98);
-  yservo.write(90);
+	xservo.write(X_INITIAL_THETA + X_OFFSET);
+  yservo.write(Y_INITIAL_THETA + X_OFFSET);
 
 	// By default the controller starts at 0, so we need to
 	// set the starting angle as well
-	xservoTrajectory.reset(98);
-  yservoTrajectory.reset(98);
+	xservoTrajectory.reset(X_INITIAL_THETA + X_OFFSET);
+  yservoTrajectory.reset(Y_INITIAL_THETA + Y_OFFSET);
 
-	/**
-	 * If we suddenly decide we want to change the maximum velocity to 30°/s,
-	 * the acceleration to 15°/s^2 and deceleration to 5.3°/s^2
-	 */
+  /**
+   * FORMAT: Trajectory(float maxVelocity, float acceleration, float deceleration, float threshold)
+   * @param Maximum Velocity (units/second) - default = 100
+   * @param Acceleration (units/second^2) - default = 50
+   * @param Deceleration (units/second^2) - default = same as acceleration
+   * @param Threshold (units) - default = 0.1
+  // For example:
+  Trajectory servoTrajectory(20, 15, 12.5, 0.01);
+
+  // If the default threshold of 0.1 doesn't need to be changed:
+  Trajectory servoTrajectory(20, 15, 12.5);
+
+  // If you want the acceleration and deceleration to be the same:
+  Trajectory servoTrajectory(20, 15);
+
+  * If we suddenly decide we want to change the maximum velocity to 30°/s,
+  * the acceleration to 15°/s^2 and deceleration to 5.3°/s^2
 	//xservoTrajectory.setMaxVel(30);
 	//xservoTrajectory.setAcc(15);
 	//xservoTrajectory.setDec(5.3);
-
-	/**
+ 
 	 * To read what the current velocity and acceleration settings are
-	 */
 	//float maxVelocity = xservoTrajectory.getMaxVel();
 	//float acceleration = xservoTrajectory.getAcc();
 	//float deceleration = xservoTrajectory.getDec();
-
-	updateTimer = millis();
+*/
 }
-
-
-/* * * * * * * * * * * * * * * * * * * * * * *
- * NEW MOVEMENT COMMANDS DEMO
- * * * * * * * * * * * * * * * * * * * * * * */
-void nextMove() {
-	switch (moveNumber) {
-		case 0:
-			// First we move to the 180° position as fast as possible
-			xservoTrajectory.setTargetPos(118);
-			break;
-		case 1:
-			// Then move back to 20° as fast as possible
-			xservoTrajectory.setTargetPos(78);
-			break;
-
-		case 2:
-			// Next move to 180°, but over the course of 5 seconds
-			xservoTrajectory.setTargetPos(118);
-			break;
-
-		case 3:
-			// Finally back to 20°, taking 8.5 seconds
-			xservoTrajectory.setTargetPos(98);
-			break;
-
-		default:
-			// If all other moves have completed, stop the program
-			// Serial.println("All moves completed");
-			while(1) {}
-	}
-
-	moveNumber++;
-}
-
 
 /* * * * * * * * * * * * * * * * * * * * * * *
  * LOOP
  * * * * * * * * * * * * * * * * * * * * * * */
 void loop() {
-    get_messages_from_serial();
-  	// Update the servo position at regular intervals
-	  if (millis() - updateTimer >= UPDATE_TIME) {
+  // Update the servo position at regular intervals
+	if (millis() - updateTimer >= UPDATE_TIME) {
 		updateTimer += UPDATE_TIME;
 
 		// Update the controller
-		float currentAngle = xservoTrajectory.update();
+    float xcurrentAngle = xservoTrajectory.update();
+    float ycurrentAngle = yservoTrajectory.update();
 
 		// Set the new servo position; the function only takes integer numbers
-		xservo.write(round(xservo_angle));
+    xservo.write(round(xcurrentAngle));
+    yservo.write(round(ycurrentAngle));
 
 		/**
 		 * For more precise servo control, you could use writeMicroseconds.
@@ -149,36 +133,48 @@ void loop() {
 
     // Preprogrammed movemnets to demo/test the blaster controller
 		// Only once the servo has reached the desired position, complete the next move
-		//if (servoTrajectory.ready()) {
-		//	nextMove();
-    //  delay(500);
-    //  fire();
-    //  delay(500);
-		//}
-	}
+		if (xservoTrajectory.ready()) {
+      xservoTrajectory.setTargetPos(xservo_angle + X_OFFSET);
+		}
+    if (yservoTrajectory.ready()) {
+      yservoTrajectory.setTargetPos(yservo_angle + Y_OFFSET);
+    }
+    if (flywheel_engage == 1){
+      spinup();
+      fspin = 1;
+    }
+    if (trigger_engage == 1){
+      fire();
+    }
+//    if ((fspin = 1) && (flywheel_engage = 0)){
+//      spindown();
+//    }
+  }
+    get_messages_from_serial();
 }
 
 void spinup(){
-    digitalWrite(MOTOR_PIN, HIGH);
-    // Serial.println("Flywheels Engaged");
+    digitalWrite(FLYWHEEL_PIN, HIGH);
+    //Serial.println("Flywheels Engaged");
     delay(FLYWHEEL_SPINUP_TIME);
 }
 
 void spindown(){
-    digitalWrite(MOTOR_PIN, LOW);
-    // Serial.println("Flywheels Disengaged");
+    digitalWrite(FLYWHEEL_PIN, LOW);
+    //Serial.println("Flywheels Disengaged");
 }
 
 void fire() {
     digitalWrite(TRIGGER_PIN, HIGH);
-    // Serial.println("Fire!!!");
+    //Serial.println("Fire!!!");
     delay(80);
     digitalWrite(TRIGGER_PIN, LOW);
+    spindown();
 }
 
 void stop() {
   digitalWrite(TRIGGER_PIN, LOW);
-  digitalWrite(MOTOR_PIN, LOW);
+  digitalWrite(FLYWHEEL_PIN, LOW);
 }
 
 int convert_to_pwm(float motor_speed) {
@@ -216,8 +212,11 @@ void get_messages_from_serial() {
       {
         case STOP:
         {
-          //motor_speed = 0;
-          //stop();
+          trigger_engage = 0;
+          flywheel_engage = 0;
+          xservo_angle = (X_INITIAL_THETA + X_OFFSET);
+          yservo_angle = (Y_INITIAL_THETA + Y_OFFSET);
+          stop();
           if(DEBUG)
           {
             //write_order(STOP);
@@ -234,14 +233,35 @@ void get_messages_from_serial() {
           }
           break;
         }
-        case FLYWHEEL:
+        case YSERVO:
         {
-          // between -100 and 100
-          //motor_speed = read_i8();
+          yservo_angle = read_i16();
           if(DEBUG)
           {
-            //write_order(MOTOR);
-            //write_i8(motor_speed);
+            write_order(YSERVO);
+            //write_i16(servo_angle);
+          }
+          break;
+        }
+        case FLYWHEEL:
+        {
+          // 0 or 1
+          flywheel_engage = read_i8();
+          if(DEBUG)
+          {
+            write_order(FLYWHEEL);
+            write_i8(flywheel_engage);
+          }
+          break;
+        }
+        case TRIGGER:
+        {
+          // 0 or 1
+          trigger_engage = read_i8();
+          if(DEBUG)
+          {
+            write_order(TRIGGER);
+            write_i8(trigger_engage);
           }
           break;
         }
